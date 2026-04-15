@@ -1,0 +1,24 @@
+const express = require('express');
+const cors = require('cors');
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+// Health check
+app.get('/', (req, res) => {
+  res.send('Backend API is running');
+});
+
+// Tenants endpoint (Fix for 404)
+app.get('/api/v1/tenants', (req, res) => {
+  res.json([
+    { id: 1, name: "Antalya VIP Transfer" },
+    { id: 2, name: "Bodrum Shuttle" }
+  ]);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

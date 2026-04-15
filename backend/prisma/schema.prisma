@@ -1,0 +1,763 @@
+// ════════════════════════════════════════════════════════════════════
+// Fleet Tracking B2B SaaS — Prisma Schema
+// Multi-Tenant Architecture · PostgreSQL · UUIDs
+// ════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  TENANT_OPERATOR
+  DRIVER
+  PASSENGER
+}
+
+enum HardwareType {
+  ARVENTO
+  UDP
+  APP_ONLY
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum RouteType {
+  SHUTTLE
+  TRANSFER
+  SCHOOL
+  CORPORATE
+}
+
+enum RouteStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum ActiveTripStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum PassengerRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum PassengerRideStatus {
+  UNKNOWN
+  BOARDED
+  NO_SHOW
+}
+
+enum RouteSource {
+  TENANT
+  DRIVER
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum InvoiceType {
+  RECURRING
+  PRORATA
+  ONE_TIME_SETUP
+  HARDWARE
+}
+
+enum InvoiceStatus {
+  PAID
+  PENDING
+  OVERDUE
+}
+
+enum FinancialTransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum AnnouncementType {
+  INFO
+  WARNING
+  SUCCESS
+}
+
+enum DispatchPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum CommsTargetType {
+  ALL
+  DRIVERS
+  PASSENGERS
+  TENANT_ADMINS
+  VEHICLE_PLATE
+}
+
+enum SOSStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum ErrorReportStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+}
+
+enum AlertSeverity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum VehicleRecordType {
+  TRAFIK_SIGORTASI
+  KASKO
+  MUAYENE
+  PERIYODIK_BAKIM
+  GIDER_FISI
+  DIGER
+}
+
+enum FeedbackSource {
+  INTERNAL_PASSENGER
+  EXTERNAL_QR
+}
+
+enum FeedbackStatus {
+  PENDING
+  REVIEWED
+  RESOLVED
+}
+
+// ─── MODELS ──────────────────────────────────────────────────────
+
+/// Catalog of vehicle makes/models with a representative photo.
+model VehicleModel {
+  id        String   @id @default(uuid())
+  brand     String
+  modelName String
+  photoUrl  String
+  createdAt DateTime @default(now())
+
+  vehicles Vehicle[]
+
+  @@map("vehicle_models")
+}
+
+/// Dynamic sidebar menu items per tenant (controls which modules are visible).
+model TenantMenu {
+  id       String  @id @default(uuid())
+  tenantId String
+  label    String
+  route    String
+  icon     String
+  isActive Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_menus")
+}
+
+/// Subscription plan catalog (e.g. Standard, Pro, Enterprise).
+model SubscriptionPlan {
+  id              String  @id @default(uuid())
+  name            String  @unique                /// Plan adı: Standard, Pro, Enterprise
+  pricePerVehicle Float                           /// Araç başı aylık ücret (TRY)
+  minVehicles     Int     @default(1)             /// Minimum araç sayısı
+  maxVehicles     Int     @default(9999)          /// Maksimum araç sayısı
+  isActive        Boolean @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenants Tenant[]
+
+  @@map("subscription_plans")
+}
+
+/// Company / Organization — the root of every tenant-scoped query.
+model Tenant {
+  id               String       @id @default(uuid())
+  name             String
+  subscriptionPlan String       @default("FREE")    /// Legacy text field (kept for backward compat)
+  planId           String?                           /// FK to SubscriptionPlan
+  status           TenantStatus @default(ACTIVE)     /// ACTIVE | SUSPENDED
+  isActive         Boolean      @default(true)
+
+  // ─── Billing / e-Fatura fields ────────────────────────────────
+  legalName        String?             /// Resmi Firma Ünvanı
+  taxId            String?             /// VKN / TCKN
+  taxOffice        String?             /// Vergi Dairesi
+  billingAddress   String?             /// Fatura Adresi
+  contactPhone     String?             /// İletişim Telefonu
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  plan     SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  users    User[]
+  vehicles Vehicle[]
+  routes   Route[]
+  clients  Client[]
+  menus    TenantMenu[]
+  invoices Invoice[]
+  auditLogs AuditLog[]
+  vehicleAlerts VehicleAlert[]
+  alertSetting  TenantAlertSetting?
+  geofenceDefinitions GeofenceDefinition[]
+  driverShifts DriverShift[]
+  vehicleRecords VehicleRecord[]
+  feedbacks      Feedback[]
+  financialTransactions FinancialTransaction[]
+  tenantAnnouncements TenantAnnouncement[]
+  sosAlerts SOSAlert[]
+  errorReports ErrorReport[]
+  activeTrips ActiveTrip[]
+
+  @@index([planId])
+  @@map("tenants")
+}
+
+model Client {
+  id             String   @id @default(uuid())
+  tenantId       String
+  name           String
+  taxNumber      String
+  taxOffice      String
+  invoiceAddress String
+  contactEmail   String
+  monthlyAllowance Float   @default(0)
+  createdAt      DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users    User[]
+  routes   Route[]
+  invoices Invoice[]
+  vehicles Vehicle[]
+
+  @@index([tenantId])
+  @@index([tenantId, name])
+  @@map("clients")
+}
+
+/// Financial invoice for a tenant.
+model Invoice {
+  id          String        @id @default(uuid())
+  invoiceNo   String        @unique               /// e.g. INV-2026-001
+  tenantId    String?
+  clientId    String?
+  amount      Float                                /// Invoice total (TRY)
+  type        InvoiceType   @default(RECURRING)    /// RECURRING | PRORATA | ONE_TIME_SETUP | HARDWARE
+  status      InvoiceStatus @default(PENDING)      /// PAID | PENDING | OVERDUE
+  description String?                              /// Human-readable line item description
+  issueDate   DateTime      @default(now())        /// Fatura tarihi
+  dueDate     DateTime                             /// Vade tarihi (son ödeme)
+  paidAt      DateTime?                            /// Ödeme tarihi
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+/// Platform user.  SUPER_ADMIN has tenantId = null (platform-level).
+/// At least one of email / phone must be set (enforced at app layer).
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String?
+  clientId     String?
+  email        String?  @unique
+  phone        String?  @unique
+  passwordHash String
+  name         String
+  licenseClass String?
+  address      String?
+  role         UserRole @default(PASSENGER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant            Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client            Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  driverRoutes      Route[]   @relation("DriverRoutes")
+  assignedVehicles  Vehicle[] @relation("VehicleDriver")
+  assignmentHistory VehicleAssignmentHistory[] @relation("DriverAssignmentHistory")
+  auditLogs         AuditLog[]
+  shifts            DriverShift[]
+  vehicleRecords    VehicleRecord[] @relation("VehicleRecordDriver")
+  driverFeedbacks   Feedback[]      @relation("FeedbackDriver")
+  createdTenantAnnouncements TenantAnnouncement[] @relation("TenantAnnouncementCreator")
+  announcementReadLogs AnnouncementReadLog[]
+  sosAlertsAsDriver SOSAlert[] @relation("SosDriver")
+  resolvedSosAlerts SOSAlert[] @relation("SosResolver")
+  reportedErrorReports ErrorReport[] @relation("ErrorReportReporter")
+  resolvedErrorReports ErrorReport[] @relation("ErrorReportResolver")
+  activeTrips          ActiveTrip[] @relation("ActiveTripDriver")
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@map("users")
+}
+
+model VehicleRecord {
+  id                String            @id @default(uuid())
+  tenantId          String
+  vehicleId         String
+  driverId          String?
+  recordType        VehicleRecordType
+  costAmount        Float             @default(0)
+  expiryDate        DateTime?
+  currentKm         Int?
+  nextMaintenanceKm Int?
+  fileUrl           String?
+  description       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driver  User?   @relation("VehicleRecordDriver", fields: [driverId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, recordType])
+  @@index([vehicleId, createdAt])
+  @@index([driverId])
+  @@map("vehicle_records")
+}
+
+model FinancialTransaction {
+  id          String                   @id @default(uuid())
+  tenantId    String
+  type        FinancialTransactionType
+  category    String
+  amount      Float
+  date        DateTime                 @default(now())
+  description String
+  relatedRecordId String?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, date])
+  @@index([tenantId, type])
+  @@map("financial_transactions")
+}
+
+model Feedback {
+  id             String         @id @default(uuid())
+  tenantId       String
+  vehicleId      String
+  driverId       String
+  source         FeedbackSource
+  rating         Int?
+  message        String
+  mediaUrl       String?
+  mediaExpiresAt DateTime?
+  status         FeedbackStatus @default(PENDING)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driver  User    @relation("FeedbackDriver", fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, source, createdAt])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([mediaExpiresAt])
+  @@map("feedbacks")
+}
+
+/// Global system announcements visible to all or specific roles.
+model Announcement {
+  id          String           @id @default(uuid())
+  title       String
+  message     String
+  type        AnnouncementType @default(INFO)
+  targetRoles String[]         @default(["ALL"])     /// e.g. ["ALL"] or ["TENANT_ADMIN","DRIVER"]
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+
+  @@map("announcements")
+}
+
+model TenantAnnouncement {
+  id              String           @id @default(uuid())
+  tenantId        String
+  createdByUserId String?
+  title           String
+  message         String
+  type            AnnouncementType @default(INFO)
+  priority        DispatchPriority @default(NORMAL)
+  targetType      CommsTargetType  @default(ALL)
+  targetValue     String?
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User?  @relation("TenantAnnouncementCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  readLogs   AnnouncementReadLog[]
+
+  @@index([tenantId, isActive, createdAt])
+  @@map("tenant_announcements")
+}
+
+model AnnouncementReadLog {
+  id             String   @id @default(uuid())
+  announcementId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  announcement TenantAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([userId, readAt])
+  @@map("announcement_read_logs")
+}
+
+model SOSAlert {
+  id               String    @id @default(uuid())
+  tenantId         String
+  driverId         String?
+  vehicleId        String?
+  plateSnapshot    String?
+  message          String?
+  location         Json?
+  status           SOSStatus @default(OPEN)
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  isMock           Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver      User?   @relation("SosDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle     Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  resolvedBy  User?   @relation("SosResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, createdAt])
+  @@index([driverId])
+  @@index([vehicleId])
+  @@map("sos_alerts")
+}
+
+model ErrorReport {
+  id               String            @id @default(uuid())
+  tenantId         String
+  reporterUserId   String?
+  subject          String
+  details          String
+  source           String?
+  status           ErrorReportStatus @default(OPEN)
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reporter   User?  @relation("ErrorReportReporter", fields: [reporterUserId], references: [id], onDelete: SetNull)
+  resolvedBy User?  @relation("ErrorReportResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
+  @@map("error_reports")
+}
+
+/// Audit trail — who did what, when, to which entity.
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  tenantId  String?
+  action    String                              /// e.g. "DELETE", "UPDATE", "CREATE"
+  entity    String                              /// e.g. "DRIVER", "VEHICLE", "ROUTE"
+  entityId  String                              /// PK of the affected record
+  details   Json?                               /// Previous/new state snapshot
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([entity, action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Fleet vehicle with embedded hardware / tracking device info.
+model Vehicle {
+  id             String        @id @default(uuid())
+  tenantId       String
+  vehicleModelId String?
+  clientId       String?
+  plate          String        @unique
+  vin            String        @unique
+  hardwareType   HardwareType  @default(APP_ONLY)
+  deviceId       String?       @unique
+  brand          String?
+  model          String?
+  year           Int?
+  capacity       Int           @default(0)
+  status         VehicleStatus @default(ACTIVE)
+  driverId       String?
+  publicAccessId String        @unique @default(uuid())
+  qrDownloadUrl  String?
+  publicQrToken  String        @unique @default(uuid())
+
+  // ─── M2M SIM Card Management ──────────────────────────────────
+  m2mNumber      String?                /// Phone number of the M2M SIM
+  m2mIccid       String?       @unique  /// 20-digit SIM serial (ICCID)
+  m2mOperator    String?                /// e.g. Turkcell, Vodafone, Global Roaming
+  m2mStatus      String?       @default("ACTIVE") /// ACTIVE | SUSPENDED | CANCELLED
+  m2mDataQuotaMB Int?                   /// Total allowed data in MB (e.g. 100, 500)
+  m2mUsedDataMB  Float?        @default(0) /// Data consumed this billing cycle
+  lastSeen       DateTime?
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client            Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  vehicleModel      VehicleModel? @relation(fields: [vehicleModelId], references: [id], onDelete: SetNull)
+  assignedDriver    User?         @relation("VehicleDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  routes            Route[]
+  activeTrips       ActiveTrip[]
+  assignmentHistory VehicleAssignmentHistory[]
+  alerts            VehicleAlert[]
+  geofenceAssignments GeofenceAssignment[]
+  vehicleRecords    VehicleRecord[]
+  feedbacks         Feedback[]
+  sosAlerts         SOSAlert[]
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([vehicleModelId])
+  @@index([driverId])
+  @@map("vehicles")
+}
+
+/// A named route belonging to a tenant (e.g. "Morning Shuttle — Campus A").
+model Route {
+  id        String      @id @default(uuid())
+  tenantId  String
+  clientId  String?
+  vehicleId String?
+  driverId  String?
+  name      String
+  type      RouteType   @default(SHUTTLE)
+  monthlyRevenue Float  @default(0)
+  status    RouteStatus @default(DRAFT)
+  source    RouteSource @default(TENANT)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  tenant  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client  Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  vehicle Vehicle?    @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driver  User?       @relation("DriverRoutes", fields: [driverId], references: [id], onDelete: SetNull)
+  stops   RouteStop[]
+  activeTrips ActiveTrip[]
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@map("routes")
+}
+
+model ActiveTrip {
+  id                 String           @id @default(uuid())
+  tenantId           String
+  vehicleId          String
+  driverId           String
+  routeId            String?
+  status             ActiveTripStatus @default(IN_PROGRESS)
+  name               String
+  isDirectionForward Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle  Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driver   User    @relation("ActiveTripDriver", fields: [driverId], references: [id], onDelete: Cascade)
+  route    Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  requests PassengerRequest[]
+
+  @@index([tenantId, status, createdAt])
+  @@index([vehicleId, status])
+  @@index([driverId, status])
+  @@map("active_trips")
+}
+
+model PassengerRequest {
+  id            String                 @id @default(uuid())
+  tripId        String
+  passengerName String
+  phone         String
+  status        PassengerRequestStatus @default(PENDING)
+  rideStatus    PassengerRideStatus    @default(UNKNOWN)
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  trip ActiveTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, status, createdAt])
+  @@map("passenger_requests")
+}
+
+/// Tracks who was assigned to which vehicle and when (for traffic fine liability).
+model VehicleAssignmentHistory {
+  id           String    @id @default(uuid())
+  vehicleId    String
+  driverId     String
+  assignedAt   DateTime  @default(now())
+  unassignedAt DateTime?
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driver  User    @relation("DriverAssignmentHistory", fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([driverId])
+  @@map("vehicle_assignment_history")
+}
+
+/// Ordered waypoint inside a Route.
+model RouteStop {
+  id         String   @id @default(uuid())
+  routeId    String
+  name       String
+  latitude   Float
+  longitude  Float
+  orderIndex Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  route Route @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  @@index([routeId])
+  @@map("route_stops")
+}
+
+/// Incoming telemetry alarms generated by hardware/devices.
+model VehicleAlert {
+  id         String        @id @default(uuid())
+  tenantId   String
+  vehicleId  String
+  timestamp  DateTime      @default(now())
+  alertType  String
+  details    Json?
+  severity   AlertSeverity
+  isResolved Boolean       @default(false)
+  isMock     Boolean       @default(false)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, timestamp])
+  @@index([vehicleId])
+  @@map("vehicle_alerts")
+}
+
+/// Per-tenant notification preferences for telemetry alerts.
+model TenantAlertSetting {
+  id               String  @id @default(uuid())
+  tenantId         String  @unique
+  enableIgnitionOn Boolean @default(false)
+  enableSpeeding   Boolean @default(false)
+  enableIdling     Boolean @default(false)
+  enableGeofence   Boolean @default(false)
+  enableGeofence_Master Boolean @default(false)
+  enableOffline    Boolean @default(false)
+  enablePowerCut   Boolean @default(false)
+  speedLimit       Int     @default(90)
+  idlingLimit      Int     @default(10)
+  selectedDistricts Json?
+  enableShiftControl Boolean @default(false)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_alert_settings")
+}
+
+/// Driver working schedule slots used for off-hours violation checks.
+model DriverShift {
+  id        String @id @default(uuid())
+  userId    String
+  tenantId  String
+  dayOfWeek Int
+  startTime String
+  endTime   String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, dayOfWeek])
+  @@index([userId, dayOfWeek])
+  @@map("driver_shifts")
+}
+
+model GeofenceDefinition {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  centerLat Float
+  centerLng Float
+  radiusKm  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments GeofenceAssignment[]
+
+  @@index([tenantId])
+  @@map("geofence_definitions")
+}
+
+model GeofenceAssignment {
+  id                   String  @id @default(uuid())
+  geofenceDefinitionId String
+  vehicleId            String
+  isActive             Boolean @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  geofenceDefinition GeofenceDefinition @relation(fields: [geofenceDefinitionId], references: [id], onDelete: Cascade)
+  vehicle            Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([geofenceDefinitionId])
+  @@unique([geofenceDefinitionId, vehicleId])
+  @@map("geofence_assignments")
+}
